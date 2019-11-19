@@ -1,0 +1,305 @@
+#include "PPMReader.h"
+//Infrared-----------------------------------------------------------------------
+#include "IRLibAll.h"
+//Create a receiver object to listen on pin 2
+IRrecvPCI myReceiver(0);
+//Create a decoder object 
+IRdecode myDecoder;
+IRsend mySender;
+uint32_t lastValueSent;
+volatile unsigned long lastIRTime = 0;  // the last time the output pin was toggled
+//-------------------------------------------------------------------------------
+//NeoPixel-----------------------------------------------------------------------
+#include <Adafruit_NeoPixel.h>
+
+#define PIXEL_PIN    9    // Digital IO pin connected to the NeoPixels.
+//#define PIXEL_PIN    6    // Digital IO pin connected to the NeoPixels. front of robot
+
+#define PIXEL_COUNT 1
+// When we setup the NeoPixel library, we tell it how many pixels, and which pin to use to send signals.
+// Note that for older NeoPixel strips you might need to change the third parameter--see the strandtest
+// example for more information on possible values.
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels2 = Adafruit_NeoPixel(PIXEL_COUNT, 6, NEO_GRB + NEO_KHZ800);
+//-------------------------------------------------------------------------------
+//Buzzer-------------------------------------------------------------------------
+//const int BUZZER_PIN = 10;
+const int BUZZER_PIN = 19;
+const int BUZZER_PIN2 = 10;
+//-------------------------------------------------------------------------------
+//Buttons------------------------------------------------------------------------
+const int BUTTON_PIN = 5;
+
+long debouncing_time = 350; //Debouncing Time in Milliseconds
+volatile unsigned long last_micros;
+//-------------------------------------------------------------------------------
+//LED----------------------------------------------------------------------------
+//const int LED_PIN = 19;
+//-------------------------------------------------------------------------------
+
+
+//RC-----------------------------------------------------------------------------
+//unsigned long t, dt, t1;
+//int ti;
+//unsigned long test[9], testf[9], ch[8];
+//bool rc_enabled = true;
+////specifing arrays and variables to store values 
+
+// PPMReader(pin, interrupt)
+PPMReader ppmReader(11, digitalPinToInterrupt(11), false);
+//PPMReader ppmReader(13, digitalPinToInterrupt(13), false); //direct conn
+
+String inputString = "";         // a String to hold incoming data
+bool stringComplete = false;  // whether the string is complete
+
+void setup() 
+{
+  //Serial-------------------------------------------------------------------------
+  Serial.begin(9600);
+  delay(500); //while (!Serial); //delay for Leonardo
+  inputString.reserve(200);
+  //-------------------------------------------------------------------------------
+  //Infrared-----------------------------------------------------------------------
+  myReceiver.enableIRIn(); // Start the receiver
+  //-------------------------------------------------------------------------------
+  //NeoPixel-----------------------------------------------------------------------
+  pixels.begin();
+  pixels2.begin();
+  pixels.show(); // Initialize all pixels to 'off'
+  pixels2.show(); // Initialize all pixels to 'off'
+  //-------------------------------------------------------------------------------
+  //Buzzer-------------------------------------------------------------------------
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(BUZZER_PIN2, OUTPUT);
+  //-------------------------------------------------------------------------------
+  //Buttons------------------------------------------------------------------------
+  //pinMode(LED_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), debounceBtn, RISING);
+  //-------------------------------------------------------------------------------
+
+  //RC-----------------------------------------------------------------------------
+//    pinMode(2, INPUT_PULLUP);
+//  attachInterrupt(digitalPinToInterrupt(11), read_signal, FALLING);
+//  // enabling interrupt at pin 2
+//  ti=0;
+  //-------------------------------------------------------------------------------
+  
+  playBoot();
+}
+
+
+void loop() 
+{
+  //------IR RECEIVER---------------------------------------------------------------
+  //Continue looping until you get a complete signal received
+  if (myReceiver.getResults()) {
+    myDecoder.decode();           //Decode it
+    //myDecoder.dumpResults(true);  //Now print results. Use false for less detail
+    myReceiver.enableIRIn();      //Restart receiver
+    //Serial.println(myDecoder.value);
+    receivedValue(myDecoder.value);
+  }
+
+
+//  static int count;
+//  count = 0;
+//  while (ppmReader.get(count) != 0) { //print out the servo values
+//      Serial.print(ppmReader.get(count));
+//      Serial.print("  ");
+//      count++;
+//  }
+//  Serial.print("\n");
+//  count = 0;
+//  delay(500);
+
+    static int l;
+    Serial.print("R,");
+    for(l=0;l<8;l++)
+    {
+      Serial.print(ppmReader.get(l));Serial.print(",");
+      //Serial.print(testf[l]);Serial.print(", ");
+    }
+    Serial.print("\n");
+    delay(50);
+    Serial.flush();
+
+
+  while (Serial.available()) {
+    // get the new byte:
+    char inChar = (char)Serial.read();
+    // add it to the inputString:
+    inputString += inChar;
+    // if the incoming character is a newline, set a flag so the main loop can
+    // do something about it:
+    if (inChar == '\n') {
+      stringComplete = true;
+    }
+  }
+//stringComplete = true;
+    if (stringComplete) {
+      if (inputString[0] == 'r')
+      {
+        setColor(pixels.Color(250,0,0));
+      }
+      else if (inputString[0] == 'g')
+      {
+        setColor(pixels.Color(0,250,0));
+      }
+      else if (inputString[0] == 'b')
+      {
+        setColor(pixels.Color(0,0,250));
+      }
+      else if (inputString[0] == 'y')
+      {
+        setColor(pixels.Color(250,250,0));
+      }
+      else if (inputString[0] == 'p')
+      {
+        setColor(pixels.Color(250,0,250));
+      }
+      else if (inputString[0] == 'o')
+      {
+        setColor(pixels.Color(250,100,0));
+      }
+      else if (inputString[0] == 'w')
+      {
+        setColor(pixels.Color(250,250,250));
+      }
+      else if (inputString[0] == 'z')
+      {
+        setColor(pixels.Color(0,0,0));
+      }
+      
+    
+    // clear the string:
+    inputString = "";
+    stringComplete = false;
+  }
+
+
+  //-------RC RECEIVER-------------------------------------------------------------
+//
+//    //test code
+//    if(ppmReader.get(6) < 1200)
+//    {
+//       setColor(pixels.Color(150,0,0));
+//    }
+//    else if(ppmReader.get(6) < 1800)
+//    {
+//      setColor(pixels.Color(0,150,0));
+//    }
+//    else
+//    {
+//      setColor(pixels.Color(0,0,150));
+//    }
+    
+  
+}
+
+
+//void serialEvent() {
+//  while (Serial.available()) {
+//    // get the new byte:
+//    char inChar = (char)Serial.read();
+//    // add it to the inputString:
+//    inputString += inChar;
+//    // if the incoming character is a newline, set a flag so the main loop can
+//    // do something about it:
+//    if (inChar == '\n') {
+//      stringComplete = true;
+//    }
+//  }
+//}
+
+
+void receivedValue(uint32_t value)
+{ 
+  
+  uint32_t deltaT = (millis() - lastIRTime); 
+  lastIRTime = millis();
+  //Serial.println(deltaT);
+  if (deltaT > 500) {
+  switch(value) {
+        case 0xc0:  //u
+          flashColor(pixels.Color(0,150,0));
+          doBeep(2200);
+          Serial.write("u\n");
+          break;
+        case 0xc1:  //d
+          flashColor(pixels.Color(150,0,0));
+          doBeep(1800);
+          Serial.write("d\n");
+          break;
+        case 0xc2:  //l
+          flashColor(pixels.Color(150,150,0));
+          doBeep(1900);
+          Serial.write("l\n");
+          break;
+        case 0xc3:  //c
+          flashColor(pixels.Color(0,0,150));
+          doBeep(2000);
+          Serial.write("c\n");
+          break;
+        case 0xc4:  //r
+          flashColor(pixels.Color(0,150,150));
+          doBeep(2100);
+          Serial.write("r\n");
+          break;
+    }
+    sendIR(value);
+    //doBeep(4000);
+    
+  }
+}
+
+
+
+
+void sendIR(uint32_t code)
+{
+  myReceiver.disableIRIn();
+  //mySender.send(SONY,0xa8bca, 20);
+  mySender.send(SONY,code, 8);
+  lastValueSent = code;
+  myReceiver.enableIRIn(); // Re-enable receiver
+}
+
+void doBeep(int freq) {
+  tone(BUZZER_PIN, freq, 100);
+}
+
+void setColor(uint32_t c) {// uint8_t wait
+  pixels.setPixelColor(0, c); // Moderately bright green color.
+  pixels.show();
+  pixels2.setPixelColor(0, c); // Moderately bright green color.
+  pixels2.show();
+}
+
+void flashColor(uint32_t c) {
+  //digitalWrite(LED_PIN, HIGH);
+  setColor(c);
+  delay(200);
+  setColor(pixels.Color(0,0,0));
+  //digitalWrite(LED_PIN, LOW);
+}
+
+//Buttons------------------------------------------------------------------------
+void debounceBtn() {
+  if((long)(micros() - last_micros) >= debouncing_time * 1000) {
+    interruptBtn();
+    last_micros = micros();
+  }
+}
+void interruptBtn() {
+  doBeep(2000);
+  //playBoot();
+}
+//-------------------------------------------------------------------------------  
+
+
+
+
+
+
+

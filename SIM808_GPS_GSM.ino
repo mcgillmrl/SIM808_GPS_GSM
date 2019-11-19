@@ -1,3 +1,5 @@
+#include "PPMReader.h"
+
 #include<stdio.h>
 #include<string.h>
 #define ADAFRUIT_FONA_DEBUG
@@ -32,18 +34,82 @@ int sat_in_view=0;
 int sat_used=0;
 int CN0_max=0;
 
+//remote code
+PPMReader ppmReader(3, digitalPinToInterrupt(3), false);
+//Infrared-----------------------------------------------------------------------
+#define IR_SEND_PWM_PIN 9
+#include "IRLibAll.h"
+//Create a receiver object to listen on pin 2
+IRrecvPCI myReceiver(5);
+//Create a decoder object 
+IRdecode myDecoder;
+IRsend mySender;
+uint32_t lastValueSent;
+volatile unsigned long lastIRTime = 0;  // the last time the output pin was toggled
+//NeoPixels
+#include "FastLED.h"
+#define NUM_LEDS 10
+CRGB leds[NUM_LEDS];
 
 void setup()
 {
-  SerialUSB.begin(1000000);
-  while (!SerialUSB) {
-    ; // wait for serial port to connect
+  pinMode(2, OUTPUT);
+  pinMode(4, OUTPUT);
+  for(int t = 0; t<1000; t++)
+  {digitalWrite(4, HIGH);
+  delay(200);
+  digitalWrite(4, LOW);
+  delay(200);
   }
+
+  
+  //remote code
+  ppmReader.start();
+  //Infrared-----------------------------------------------------------------------
+  myReceiver.enableIRIn(); // Start the receiver
+  //NeoPixel
+  FastLED.addLeds<NEOPIXEL, 6>(leds, NUM_LEDS);
+
+          for(int j=0; j<3; j++)
+    {
+    for(int i=0; i<3; i++)
+    {
+      leds[i] = CRGB::White; FastLED.show(); delay(100);
+//      leds[i] = CRGB::Black; FastLED.show(); delay(100);
+    }
+    for(int i=0; i<10; i++)
+    {
+      leds[i] = CRGB::Red; FastLED.show(); delay(100);
+//      leds[i] = CRGB::Black; FastLED.show(); delay(100);
+    }
+    for(int i=0; i<10; i++)
+    {
+      leds[i] = CRGB::Green; FastLED.show(); delay(100);
+//      leds[i] = CRGB::Black; FastLED.show(); delay(100);
+    }
+    for(int i=0; i<10; i++)
+    {
+      leds[i] = CRGB::Blue; FastLED.show(); delay(100);
+//      leds[i] = CRGB::Black; FastLED.show(); delay(100);
+    }
+    }
+
+
+  
+  SerialUSB.begin(1000000);
+  SerialUSB.write("hello Juavis");
+//  while (!SerialUSB) {
+//    ; // wait for serial port to connect
+//  }
   sim808_init();
 }
 
 void loop()
 {
+
+
+
+    
     // check gps status
     checkGPS();
 
@@ -61,6 +127,93 @@ void loop()
       if (gps_forwarding)
         sim808.enableGPSNMEA(1);
     }
+
+    SerialUSB.print("\n");
+    SerialUSB.print("R,");
+
+    for(int l=0;l<8;l++)
+    {
+      SerialUSB.print((int)ppmReader.get(l));
+      SerialUSB.print(",");
+      //Serial.print(testf[l]);Serial.print(", ");
+    }
+    SerialUSB.print("\n");
+
+  //------IR RECEIVER---------------------------------------------------------------
+  //Continue looping until you get a complete signal received
+  if (myReceiver.getResults()) {
+    myDecoder.decode();           //Decode it
+    //myDecoder.dumpResults(true);  //Now print results. Use false for less detail
+    myReceiver.enableIRIn();      //Restart receiver
+    //Serial.println(myDecoder.value);
+    receivedValue(myDecoder.value);
+  }
+//    delay(50);
+}
+
+void receivedValue(uint32_t value)
+{ 
+  
+  uint32_t deltaT = (millis() - lastIRTime); 
+  lastIRTime = millis();
+  //Serial.println(deltaT);
+  if (deltaT > 500) {
+  switch(value) {
+        case 0xc0:  //u
+//          flashColor(pixels.Color(0,150,0));
+          doBeep(2200);
+          SerialUSB.write("u\n");
+          break;
+        case 0xc1:  //d
+//          flashColor(pixels.Color(150,0,0));
+          doBeep(1800);
+          SerialUSB.write("d\n");
+          break;
+        case 0xc2:  //l
+//          flashColor(pixels.Color(150,150,0));
+          doBeep(1900);
+          SerialUSB.write("l\n");
+          break;
+        case 0xc3:  //c
+//          flashColor(pixels.Color(0,0,150));
+          doBeep(2000);
+          SerialUSB.write("c\n");
+          break;
+        case 0xc4:  //r
+//          flashColor(pixels.Color(0,150,150));
+          doBeep(2100);
+          SerialUSB.write("r\n");
+          break;
+    }
+    sendIR(value);
+    //doBeep(4000);
+    
+  }
+}
+
+void sendIR(uint32_t code)
+{
+  myReceiver.disableIRIn();
+  //mySender.send(SONY,0xa8bca, 20);
+  SerialUSB.print("Code:");
+  SerialUSB.print(code);
+  SerialUSB.print("\n");
+  mySender.send(SONY,code, 8);
+  lastValueSent = code;
+  myReceiver.enableIRIn(); // Re-enable receiver
+}
+
+
+void doBeep(int freq) {
+
+}
+
+void setColor(uint32_t c) {// uint8_t wait
+
+}
+
+void flashColor(uint32_t c) {
+
 }
 
 
@@ -135,7 +288,8 @@ void checkGPS(){
           sim808.enableGPSNMEA(0);
           gps_forwarding = false;
         }
-        delay(1000);
+        //        delay(1000);
+        break; 
       case 2:
       case 3:
         // start forwarding
