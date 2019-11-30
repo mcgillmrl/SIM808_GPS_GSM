@@ -70,7 +70,7 @@ void playBoot()
     }
     else                          // otherwise, play the note
     {
-      tone(BUZZER_PIN, frequency(notes[i]), duration);
+      tone(SPEAKER, frequency(notes[i]), duration);
       delay(duration);            // wait for tone to finish
     }
     delay(tempo/10);              // brief pause between notes
