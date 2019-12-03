@@ -1,19 +1,24 @@
 #include "PPMReader.h"
-
 #include <stdio.h>
 #include <string.h>
-#define ADAFRUIT_FONA_DEBUG
 #include "GenericSIM808.h"
-#define DEBUG true
 
-int power_on = 9;
-char replybuffer[250];
+#define RC_IN 2
+#define RELAY_CLK 3
+#define RELAY_D 4
+#define IR_RX 5
+#define TOP_LEDS 6
+#define INTERNAL_LEDS 7
+#define SPEAKER 8
+#define IR_TX 9
+#define IR_SEND_PWM_PIN 9
+#define SIM808_POWER_ON 9
+#define NUM_LEDS 10
 
-// Use this for FONA 800 and 808s
-GenericSIM808 sim808 = GenericSIM808(power_on);
-uint8_t type;
+#include "IRLibAll.h"
+#include "FastLED.h"
 
-//gps data;
+// gps global variables
 int gps_msg_count = 0;
 char gpsdata[120];
 long last_msg_time = millis();
@@ -32,65 +37,47 @@ int sat_in_view = 0;
 int sat_used = 0;
 int CN0_max = 0;
 
-//remote code
-PPMReader ppmReader(3, digitalPinToInterrupt(3), false);
-//Infrared-----------------------------------------------------------------------
-#define IR_SEND_PWM_PIN 9
-#include "IRLibAll.h"
-//Create a receiver object to listen on pin 2
-IRrecvPCI myReceiver(5);
-//Create a decoder object
-IRdecode myDecoder;
-IRsend mySender;
+// IR remote global variables
 uint32_t lastValueSent;
 volatile unsigned long lastIRTime = 0; // the last time the output pin was toggled
+
+// RC global variables
+String inputString = ""; // a String to hold incoming data
+
 //NeoPixels
-#include "FastLED.h"
-#define NUM_LEDS 10
 CRGB leds[NUM_LEDS];
+
+// SIM808 GPS GSM module
+GenericSIM808 sim808 = GenericSIM808(SIM808_POWER_ON);
+
+// RC remote reader
+PPMReader ppmReader(RC_IN, digitalPinToInterrupt(RC_IN), false);
+
+//Infrared remote
+IRrecvPCI myReceiver(IR_RX); // receiver
+IRdecode myDecoder;          // decoder
+IRsend mySender;             // sender
 
 void setup()
 {
-  //remote code
-  ppmReader.start();
-  //Infrared-----------------------------------------------------------------------
-  myReceiver.enableIRIn(); // Start the receiver
-  //NeoPixel
-  FastLED.addLeds<NEOPIXEL, 6>(leds, NUM_LEDS);
-  for (int j = 0; j < 3; j++)
-  {
-    for (int i = 0; i < 3; i++)
-    {
-      leds[i] = 0x999999;
-      FastLED.show();
-      delay(10);
-    }
-    for (int i = 0; i < 10; i++)
-    {
-      leds[i] = CRGB::DarkRed;
-      FastLED.show();
-      delay(10);
-    }
-    for (int i = 0; i < 10; i++)
-    {
-      leds[i] = CRGB::DarkGreen;
-      FastLED.show();
-      delay(10);
-    }
-    for (int i = 0; i < 10; i++)
-    {
-      leds[i] = CRGB::DarkBlue;
-      FastLED.show();
-      delay(10);
-    }
-  }
+  setup_pins();
 
-  SerialUSB.begin(1000000);
-  SerialUSB.write("hello Juavis");
-  //  while (!SerialUSB) {
-  //    ; // wait for serial port to connect
-  //  }
+  // init serial
+  SerialUSB.begin(115200);
+
+  // start RC remote
+  ppmReader.start();
+
+  // start IR remote
+  myReceiver.enableIRIn(); // Start the receiver
+
+  // start LEDS
+  FastLED.addLeds<NEOPIXEL, TOP_LEDS>(leds, NUM_LEDS);
+  led_strip_start_pattern();
+
+  // init GPS GSM module
   sim808_init();
+  playBoot();
 }
 
 void loop()
@@ -99,17 +86,17 @@ void loop()
   // check gps status
   checkGPS();
 
+  // print gps data, if available
   if (sim808.available())
   {
-    while (sim808.available())
+    if (sim808.available())
     {
-      SerialUSB.write(sim808.read());
+      SerialUSB.println(sim808.readStringUntil('\n'));
     }
   }
 
-  
-  // gps messages to http server
-  if (gps_msg_count % 30 == 0)
+  // periodically send gps message to http server
+  if (gps_msg_count % 30 == 0 && sim808.GPRSstate())
   {
     SerialUSB.println("Forwarding GPS data to remote server");
     sim808.enableGPSNMEA(0);
@@ -117,6 +104,7 @@ void loop()
     sim808.enableGPSNMEA(1);
   }
 
+  // Output received RC values
   SerialUSB.print("\n");
   SerialUSB.print("R,");
 
@@ -127,9 +115,8 @@ void loop()
     //Serial.print(testf[l]);Serial.print(", ");
   }
   SerialUSB.print("\n");
-  
-  //------IR RECEIVER---------------------------------------------------------------
-  //Continue looping until you get a complete signal received
+
+  // Process IR inputs
   if (myReceiver.getResults())
   {
     myDecoder.decode(); //Decode it
@@ -138,7 +125,9 @@ void loop()
     //Serial.println(myDecoder.value);
     receivedValue(myDecoder.value);
   }
-  //    delay(50);
+
+  // Process serial commands from host
+  process_host_commands();
 }
 
 void receivedValue(uint32_t value)
@@ -154,10 +143,12 @@ void receivedValue(uint32_t value)
     case 0xc0: //u
       doBeep(2200);
       SerialUSB.write("u\n");
+      switch_relay(0);
       break;
     case 0xc1: //d
       doBeep(1800);
       SerialUSB.write("d\n");
+      switch_relay(1);
       break;
     case 0xc2: //l
       doBeep(1900);
@@ -172,6 +163,7 @@ void receivedValue(uint32_t value)
       SerialUSB.write("r\n");
       break;
     }
+    //delay(200);
     sendIR(value);
     //doBeep(4000);
   }
@@ -184,21 +176,41 @@ void sendIR(uint32_t code)
   SerialUSB.print("Code:");
   SerialUSB.print(code);
   SerialUSB.print("\n");
-  mySender.send(SONY, code, 8);
+  mySender.send(SONY, code, IR_TX);
   lastValueSent = code;
   myReceiver.enableIRIn(); // Re-enable receiver
 }
 
 void doBeep(int freq)
 {
+  tone(SPEAKER, freq, 100);
+}
+
+void process_host_commands()
+{
+  if (SerialUSB.available())
+  {
+    inputString = SerialUSB.readStringUntil('\n');
+  }
 }
 
 void setColor(uint32_t c)
-{ // uint8_t wait
+{
+  // TODO
 }
 
 void flashColor(uint32_t c)
 {
+  // TODO
+}
+
+void setup_pins()
+{
+  digitalWrite(RELAY_D, HIGH);
+  pinMode(RELAY_D, OUTPUT);
+  digitalWrite(RELAY_CLK, HIGH);
+  pinMode(RELAY_CLK, OUTPUT);
+  pinMode(IR_TX, OUTPUT);
 }
 
 void sim808_init()
@@ -207,8 +219,6 @@ void sim808_init()
   if (!sim808.begin_(Serial1))
   {
     SerialUSB.println(F("Couldn't find SIM808"));
-    while (1)
-      ;
   }
   delay(1000);
 
@@ -221,62 +231,103 @@ void sim808_init()
     SerialUSB.println(imei);
   }
 
-  gsm_connect();
-  gps_power_on();
+  gsm_connect(4);
+  gps_power_on(4);
 }
 
-void switch_power()
+void switch_sim808_power()
 {
-  pinMode(power_on, OUTPUT);
-  digitalWrite(power_on, HIGH);
+  pinMode(SIM808_POWER_ON, OUTPUT);
+  digitalWrite(SIM808_POWER_ON, HIGH);
   delay(3000);
-  digitalWrite(power_on, LOW);
+  digitalWrite(SIM808_POWER_ON, LOW);
   delay(1000);
 }
 
-bool gps_power_on()
+bool gps_power_on(int n_retries)
 {
   // turn gps on
-  SerialUSB.print("Turning GPS on...");
-  while (!sim808.enableGPS(true))
+  SerialUSB.print("Turning GPS on");
+  int retries = n_retries;
+  while (retries > 0)
   {
-    switch_all_leds(CRGB::DarkRed, 3, 9);
+    SerialUSB.print(".");
+    if (sim808.enableGPS(true))
+    {
+      SerialUSB.println(" OK");
+      switch_all_leds(0x101000, 6, 9);
+      break;
+    }
+    retries--;
+
+    switch_all_leds(CRGB::DarkRed, 6, 9);
     delay(500);
-    switch_all_leds(CRGB::Black, 3, 9);
+    switch_all_leds(CRGB::Black, 6, 9);
   }
-  SerialUSB.println(" OK");
-  leds_ok(0x101000, 0, 10);
+  if (retries == 0)
+  {
+    SerialUSB.println(" FAIL. Retrying later...");
+    return false;
+  }
+  return true;
 }
 
-bool gsm_connect()
+bool gsm_connect(int n_retries)
 {
   // set GPRS network settings
   sim808.setGPRSNetworkSettings(F("hologram"), F(""), F(""));
 
   // wait until network is up
   switch_all_leds(CRGB::Black, 0, 10);
-  SerialUSB.print(F("Waiting for network registration..."));
+  SerialUSB.print(F("Waiting for network registration "));
   uint8_t n = sim808.getNetworkStatus();
-  while (n != 1 && n != 5)
+  int retries = n_retries;
+  while (retries > 0)
   {
+    SerialUSB.print(n);
+    SerialUSB.print(".");
+    if (n == 1 || n == 5)
+    {
+      SerialUSB.println(" OK");
+      switch_all_leds(0x101000, 0, 3);
+      break;
+    }
+    retries--;
     switch_all_leds(CRGB::DarkRed, 0, 3);
     delay(500);
     switch_all_leds(CRGB::Black, 0, 3);
     n = sim808.getNetworkStatus();
   }
-  SerialUSB.println(" OK");
-  leds_ok(0x101000, 0, 3);
+  if (retries == 0)
+  {
+    SerialUSB.println(" FAIL. Retying later...");
+    return false;
+  }
 
   // wait until gprs is successfully enabled
-  SerialUSB.print(F("Enabling GPRS..."));
-  while (!sim808.enableGPRS(true))
+  SerialUSB.print(F("Enabling GPRS"));
+  retries = n_retries;
+  sim808.enableGPRS(true);
+  while (retries > 0)
   {
+    SerialUSB.print(".");
+    if (sim808.enableGPRS(true))
+    {
+      SerialUSB.println(" OK");
+      switch_all_leds(0x101000, 3, 6);
+      break;
+    }
+    retries--;
     switch_all_leds(CRGB::DarkRed, 3, 6);
     delay(500);
     switch_all_leds(CRGB::Black, 3, 6);
   }
-  SerialUSB.println(F(" OK"));
-  leds_ok(0x101000, 3, 6);
+  if (retries == 0)
+  {
+    SerialUSB.println(" FAIL. Retying later...");
+    return false;
+  }
+  return true;
 }
 
 void checkGPS()
@@ -287,7 +338,7 @@ void checkGPS()
     switch (stat)
     {
     case 0:
-      gps_power_on();
+      gps_power_on(1);
       // enable gps forwarding on serial port
       sim808.enableGPSNMEA(1);
       break;
@@ -295,11 +346,14 @@ void checkGPS()
       last_msg_time = millis();
       gps_msg_count++;
       switch_all_leds(0x101000, 0, 10);
+      sim808.enableGPSNMEA(1);
       break;
     case 2:
     case 3:
       // start forwarding
       // read gps
+      if (!sim808.GPRSstate())
+        gsm_connect(1);
       sim808.getGPS(0, gpsdata, 120);
       last_msg_time = millis();
       gps_msg_count++;
@@ -315,6 +369,7 @@ void checkGPS()
 
 uint16_t GSMLoc()
 {
+  char replybuffer[250];
   uint16_t returncode;
   while (!sim808.getGSMLoc(&returncode, replybuffer, 250))
   {
@@ -400,6 +455,37 @@ void send_http_get_request()
   sim808.HTTP_POST_end();
 }
 
+void led_strip_start_pattern()
+{
+  for (int j = 0; j < 3; j++)
+  {
+    for (int i = 0; i < 3; i++)
+    {
+      leds[i] = 0x999999;
+      FastLED.show();
+      delay(10);
+    }
+    for (int i = 0; i < 10; i++)
+    {
+      leds[i] = CRGB::DarkRed;
+      FastLED.show();
+      delay(10);
+    }
+    for (int i = 0; i < 10; i++)
+    {
+      leds[i] = CRGB::DarkGreen;
+      FastLED.show();
+      delay(10);
+    }
+    for (int i = 0; i < 10; i++)
+    {
+      leds[i] = CRGB::DarkBlue;
+      FastLED.show();
+      delay(10);
+    }
+  }
+}
+
 void switch_all_leds(CRGB color, int i0, int n)
 {
   for (int i = i0; i < n; i++)
@@ -427,4 +513,23 @@ void setColors(uint8_t lr, uint8_t lg, uint8_t lb, uint8_t rr, uint8_t rg, uint8
   leds[1].green = rg;
   leds[1].blue = rb;
   FastLED.show();
+}
+
+void switch_relay(int val)
+{
+
+  if (val)
+  {
+    //switch robot on
+    digitalWrite(RELAY_D, HIGH);
+    digitalWrite(RELAY_CLK, LOW);
+    digitalWrite(RELAY_CLK, HIGH);
+  }
+  else
+  {
+    //switch robot off
+    digitalWrite(RELAY_D, LOW);
+    digitalWrite(RELAY_CLK, LOW);
+    digitalWrite(RELAY_CLK, HIGH);
+  }
 }
