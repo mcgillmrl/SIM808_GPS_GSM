@@ -11,7 +11,6 @@
 #define INTERNAL_LEDS 7
 #define SPEAKER 8
 #define IR_TX 9
-#define IR_SEND_PWM_PIN 9
 #define SIM808_POWER_ON 9
 #define NUM_LEDS 10
 
@@ -60,6 +59,8 @@ IRsend mySender;             // sender
 
 void setup()
 {
+  delay(1000);
+
   setup_pins();
 
   // init serial
@@ -80,13 +81,14 @@ void setup()
   playBoot();
 }
 
+uint32_t i = 0;
 void loop()
 {
-
   // check gps status
   checkGPS();
 
   // print gps data, if available
+
   if (sim808.available())
   {
     if (sim808.available())
@@ -143,12 +145,12 @@ void receivedValue(uint32_t value)
     case 0xc0: //u
       doBeep(2200);
       SerialUSB.write("u\n");
-      switch_relay(0);
+      switch_relay(1);
       break;
     case 0xc1: //d
       doBeep(1800);
       SerialUSB.write("d\n");
-      switch_relay(1);
+      switch_relay(0);
       break;
     case 0xc2: //l
       doBeep(1900);
@@ -163,7 +165,7 @@ void receivedValue(uint32_t value)
       SerialUSB.write("r\n");
       break;
     }
-    //delay(200);
+    delay(200);
     sendIR(value);
     //doBeep(4000);
   }
@@ -176,7 +178,7 @@ void sendIR(uint32_t code)
   SerialUSB.print("Code:");
   SerialUSB.print(code);
   SerialUSB.print("\n");
-  mySender.send(SONY, code, IR_TX);
+  mySender.send(SONY, code, 8);
   lastValueSent = code;
   myReceiver.enableIRIn(); // Re-enable receiver
 }
@@ -206,11 +208,20 @@ void flashColor(uint32_t c)
 
 void setup_pins()
 {
-  digitalWrite(RELAY_D, HIGH);
-  pinMode(RELAY_D, OUTPUT);
+  pinMode(RC_IN, INPUT);
+
   digitalWrite(RELAY_CLK, HIGH);
   pinMode(RELAY_CLK, OUTPUT);
+  digitalWrite(RELAY_D, HIGH);
+  pinMode(RELAY_D, OUTPUT);
+
+  pinMode(IR_RX, INPUT);
   pinMode(IR_TX, OUTPUT);
+
+  pinMode(TOP_LEDS, OUTPUT);
+  pinMode(INTERNAL_LEDS, OUTPUT);
+
+  pinMode(SPEAKER, OUTPUT);
 }
 
 void sim808_init()
@@ -231,8 +242,8 @@ void sim808_init()
     SerialUSB.println(imei);
   }
 
-  gsm_connect(4);
-  gps_power_on(4);
+  gsm_connect(10);
+  gps_power_on(5);
 }
 
 void switch_sim808_power()
@@ -261,7 +272,7 @@ bool gps_power_on(int n_retries)
     retries--;
 
     switch_all_leds(CRGB::DarkRed, 6, 9);
-    delay(500);
+    delay(1000);
     switch_all_leds(CRGB::Black, 6, 9);
   }
   if (retries == 0)
@@ -498,9 +509,9 @@ void switch_all_leds(CRGB color, int i0, int n)
 void leds_ok(CRGB color, int i0, int n)
 {
   switch_all_leds(color, i0, n);
-  delay(500);
+  delay(1000);
   switch_all_leds(CRGB::Black, i0, n);
-  delay(500);
+  delay(1000);
   switch_all_leds(color, i0, n);
 }
 
@@ -521,15 +532,16 @@ void switch_relay(int val)
   if (val)
   {
     //switch robot on
-    digitalWrite(RELAY_D, HIGH);
+    digitalWrite(RELAY_D, LOW);
     digitalWrite(RELAY_CLK, LOW);
     digitalWrite(RELAY_CLK, HIGH);
   }
   else
   {
     //switch robot off
-    digitalWrite(RELAY_D, LOW);
+    digitalWrite(RELAY_D, HIGH);
     digitalWrite(RELAY_CLK, LOW);
     digitalWrite(RELAY_CLK, HIGH);
+    switch_all_leds(CRGB::Black, 0, 10);
   }
 }
