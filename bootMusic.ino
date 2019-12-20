@@ -78,6 +78,27 @@ void playBoot()
 
 }
 
+void playOff(){
+  int i, duration;
+
+  for (i = songLength-1; i >= 0; i--) // step through the song arrays
+  {
+    duration = beats[i] * tempo;  // length of note/rest in ms
+
+    if (notes[i] == ' ')          // is this a rest? 
+    {
+      delay(duration);            // then pause for a moment
+    }
+    else                          // otherwise, play the note
+    {
+      tone(SPEAKER, frequency(notes[i]), duration);
+      delay(duration);            // wait for tone to finish
+    }
+    delay(tempo/10);              // brief pause between notes
+  }
+
+}
+
 
 int frequency(char note) 
 {

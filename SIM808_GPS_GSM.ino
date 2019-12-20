@@ -16,6 +16,12 @@
 
 #include "IRLibAll.h"
 #include "FastLED.h"
+#include <FlashStorage.h> // only for arduino zero boards
+ 
+// global power state
+FlashStorage(power_state, int);
+FlashStorage(boot_count, int);
+int current_power_state=0;
 
 // gps global variables
 int gps_msg_count = 0;
@@ -60,7 +66,6 @@ IRsend mySender;             // sender
 void setup()
 {
   delay(1000);
-
   setup_pins();
 
   // init serial
@@ -75,10 +80,18 @@ void setup()
   // start LEDS
   FastLED.addLeds<NEOPIXEL, TOP_LEDS>(leds, NUM_LEDS);
   led_strip_start_pattern();
+  
+  current_power_state = power_state.read(); 
+  // after flashing, don't turn the robot off
+  int bcount = boot_count.read();
+  if (bcount == 0){
+    current_power_state = 1;
+    boot_count.write(bcount+1);
+  }
+  switch_relay(current_power_state);
 
   // init GPS GSM module
   sim808_init();
-  playBoot();
 }
 
 uint32_t i = 0;
@@ -89,7 +102,7 @@ void loop()
 
   // print gps data, if available
 
-  if (sim808.available())
+  if (sim808.available() && current_power_state == 1)
   {
     if (sim808.available())
     {
@@ -107,16 +120,18 @@ void loop()
   }
 
   // Output received RC values
-  SerialUSB.print("\n");
-  SerialUSB.print("R,");
-
-  for (int l = 0; l < 8; l++)
-  {
-    SerialUSB.print((int)ppmReader.get(l));
-    SerialUSB.print(",");
-    //Serial.print(testf[l]);Serial.print(", ");
+  if ( current_power_state == 1){
+    SerialUSB.print("\n");
+    SerialUSB.print("R,");
+  
+    for (int l = 0; l < 8; l++)
+    {
+      SerialUSB.print((int)ppmReader.get(l));
+      SerialUSB.print(",");
+      //Serial.print(testf[l]);Serial.print(", ");
+    }
+    SerialUSB.print("\n");
   }
-  SerialUSB.print("\n");
 
   // Process IR inputs
   if (myReceiver.getResults())
@@ -129,13 +144,16 @@ void loop()
   }
 
   // Process serial commands from host
-  process_host_commands();
+  if (current_power_state == 1){
+    process_host_commands();
+  }
 }
 
 void receivedValue(uint32_t value)
 {
 
   uint32_t deltaT = (millis() - lastIRTime);
+  int new_power_state=current_power_state;
   lastIRTime = millis();
   //Serial.println(deltaT);
   if (deltaT > 500)
@@ -145,12 +163,10 @@ void receivedValue(uint32_t value)
     case 0xc0: //u
       doBeep(2200);
       SerialUSB.write("u\n");
-      switch_relay(1);
       break;
     case 0xc1: //d
       doBeep(1800);
       SerialUSB.write("d\n");
-      switch_relay(0);
       break;
     case 0xc2: //l
       doBeep(1900);
@@ -164,9 +180,22 @@ void receivedValue(uint32_t value)
       doBeep(2100);
       SerialUSB.write("r\n");
       break;
+    case 0xc5: // power up (u)
+      doBeep(2100);
+      SerialUSB.write("pu\n");
+      new_power_state=1;
+      break;
+    case 0xc6: // power down (d)
+      doBeep(2100);
+      SerialUSB.write("pd\n");
+      new_power_state=0;
+      break;
     }
-    delay(200);
+    delay(50);
     sendIR(value);
+    if (new_power_state != current_power_state){
+      switch_relay(new_power_state);
+    }
     //doBeep(4000);
   }
 }
@@ -499,6 +528,9 @@ void led_strip_start_pattern()
 
 void switch_all_leds(CRGB color, int i0, int n)
 {
+  if(current_power_state == 0){
+    return;
+  }
   for (int i = i0; i < n; i++)
   {
     leds[i] = color;
@@ -528,20 +560,23 @@ void setColors(uint8_t lr, uint8_t lg, uint8_t lb, uint8_t rr, uint8_t rg, uint8
 
 void switch_relay(int val)
 {
-
+  power_state.write(val);
+  current_power_state = val;
   if (val)
   {
     //switch robot on
     digitalWrite(RELAY_D, LOW);
     digitalWrite(RELAY_CLK, LOW);
     digitalWrite(RELAY_CLK, HIGH);
+    playBoot();
   }
   else
   {
     //switch robot off
+    playOff();
+    switch_all_leds(CRGB::Black, 0, 10);
     digitalWrite(RELAY_D, HIGH);
     digitalWrite(RELAY_CLK, LOW);
     digitalWrite(RELAY_CLK, HIGH);
-    switch_all_leds(CRGB::Black, 0, 10);
   }
 }
