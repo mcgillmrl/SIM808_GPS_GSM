@@ -3,7 +3,7 @@
 #include <string.h>
 #include "GenericSIM808.h"
 
-#define RC_IN 2
+#define RC_IN 10
 #define RELAY_CLK 3
 #define RELAY_D 4
 #define IR_RX 5
@@ -12,7 +12,9 @@
 #define SPEAKER 8
 #define IR_TX 9
 #define SIM808_POWER_ON 9
-#define NUM_LEDS 10
+#define NUM_TOP_LEDS 10
+#define NUM_INTERNAL_LEDS 2
+#define RC_RATE_MS 20
 
 #include "IRLibAll.h"
 #include "FastLED.h"
@@ -48,9 +50,11 @@ volatile unsigned long lastIRTime = 0; // the last time the output pin was toggl
 
 // RC global variables
 String inputString = ""; // a String to hold incoming data
+unsigned long int last_rc_msg_time = millis();
 
 //NeoPixels
-CRGB leds[NUM_LEDS];
+CRGB top_leds[NUM_TOP_LEDS];
+CRGB internal_leds[NUM_INTERNAL_LEDS];
 
 // SIM808 GPS GSM module
 GenericSIM808 sim808 = GenericSIM808(SIM808_POWER_ON);
@@ -78,8 +82,9 @@ void setup()
   myReceiver.enableIRIn(); // Start the receiver
 
   // start LEDS
-  FastLED.addLeds<NEOPIXEL, TOP_LEDS>(leds, NUM_LEDS);
-  led_strip_start_pattern();
+  FastLED.addLeds<NEOPIXEL, INTERNAL_LEDS>(internal_leds, NUM_INTERNAL_LEDS);
+  FastLED.addLeds<NEOPIXEL, TOP_LEDS>(top_leds, NUM_TOP_LEDS);
+  leds_start_pattern();
   
   current_power_state = power_state.read(); 
   // after flashing, don't turn the robot off
@@ -101,7 +106,6 @@ void loop()
   checkGPS();
 
   // print gps data, if available
-
   if (sim808.available() && current_power_state == 1)
   {
     if (sim808.available())
@@ -120,7 +124,8 @@ void loop()
   }
 
   // Output received RC values
-  if ( current_power_state == 1){
+  unsigned long int now = millis();
+  if ( current_power_state == 1 && now - last_rc_msg_time > RC_RATE_MS){
     SerialUSB.print("\n");
     SerialUSB.print("R,");
   
@@ -131,12 +136,13 @@ void loop()
       //Serial.print(testf[l]);Serial.print(", ");
     }
     SerialUSB.print("\n");
+    last_rc_msg_time = now;
   }
 
   // Process IR inputs
   if (myReceiver.getResults())
   {
-    myDecoder.decode(); //Decode it
+    myDecoder.decode(); //Decode itI
     //myDecoder.dumpResults(true);  //Now print results. Use false for less detail
     myReceiver.enableIRIn(); //Restart receiver
     //Serial.println(myDecoder.value);
@@ -162,32 +168,32 @@ void receivedValue(uint32_t value)
     {
     case 0xc0: //u
       doBeep(2200);
-      SerialUSB.write("u\n");
+      SerialUSB.write("T,u\n");
       break;
     case 0xc1: //d
       doBeep(1800);
-      SerialUSB.write("d\n");
+      SerialUSB.write("T,d\n");
       break;
     case 0xc2: //l
       doBeep(1900);
-      SerialUSB.write("l\n");
+      SerialUSB.write("T,l\n");
       break;
     case 0xc3: //c
       doBeep(2000);
-      SerialUSB.write("c\n");
+      SerialUSB.write("T,c\n");
       break;
     case 0xc4: //r
       doBeep(2100);
-      SerialUSB.write("r\n");
+      SerialUSB.write("T,r\n");
       break;
     case 0xc5: // power up (u)
       doBeep(2100);
-      SerialUSB.write("pu\n");
+      SerialUSB.write("T,pu\n");
       new_power_state=1;
       break;
     case 0xc6: // power down (d)
       doBeep(2100);
-      SerialUSB.write("pd\n");
+      SerialUSB.write("T,pd\n");
       new_power_state=0;
       break;
     }
@@ -221,18 +227,46 @@ void process_host_commands()
 {
   if (SerialUSB.available())
   {
+    SerialUSB.setTimeout(1000);
     inputString = SerialUSB.readStringUntil('\n');
+    // SerialUSB.print("DEBUG,");
+    //SerialUSB.println(inputString);
+    char *ptr = strtok((char *)inputString.c_str(), ":,");
+    while (ptr != NULL)
+    {
+      SerialUSB.println(ptr);
+      if (strcmp(ptr, "STATUS_LED") == 0 ){
+        for(int j=0; j<INTERNAL_LEDS; j++){
+          ptr = strtok(NULL, ":,");
+          uint32_t color = atoi(ptr);
+          setStatusLED(i, color);
+        }
+      }
+      else if (strcmp(ptr, "LED_STRIP") == 0 ){
+        for(int j=0; j<TOP_LEDS; j++){
+          ptr = strtok(NULL, ":,");
+          uint32_t color = atoi(ptr);
+          setLEDStrip(j, color);
+        }
+      }
+      ptr = strtok(NULL, ":,");
+    }
   }
 }
 
-void setColor(uint32_t c)
-{
-  // TODO
+void setStatusLED(int i, uint32_t color){
+  internal_leds[i] = color;
+  FastLED.show();
 }
 
-void flashColor(uint32_t c)
-{
-  // TODO
+void setLEDStrip(int i, uint32_t color){
+  top_leds[i] = color;
+  for(int j=0; j<10; j++){
+    SerialUSB.print(top_leds[j]);
+    SerialUSB.print(",");
+  }
+  SerialUSB.println("");
+  FastLED.show();
 }
 
 void setup_pins()
@@ -385,7 +419,7 @@ void checkGPS()
     case 1:
       last_msg_time = millis();
       gps_msg_count++;
-      switch_all_leds(0x101000, 0, 10);
+      //switch_all_leds(0x101000, 0, 10);
       sim808.enableGPSNMEA(1);
       break;
     case 2:
@@ -398,7 +432,7 @@ void checkGPS()
       last_msg_time = millis();
       gps_msg_count++;
       process_gps_msg(gpsdata);
-      switch_all_leds(CRGB::Green, 0, 10);
+      //switch_all_leds(CRGB::Green, 0, 10);
       sim808.enableGPSNMEA(1);
       break;
     default:
@@ -495,31 +529,55 @@ void send_http_get_request()
   sim808.HTTP_POST_end();
 }
 
-void led_strip_start_pattern()
+void leds_start_pattern()
 {
   for (int j = 0; j < 3; j++)
   {
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < NUM_TOP_LEDS; i++)
     {
-      leds[i] = 0x999999;
+      top_leds[i] = 0x999999;
       FastLED.show();
       delay(10);
     }
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < NUM_INTERNAL_LEDS; i++)
     {
-      leds[i] = CRGB::DarkRed;
+      internal_leds[i] = 0x999999;
       FastLED.show();
       delay(10);
     }
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < NUM_TOP_LEDS; i++)
     {
-      leds[i] = CRGB::DarkGreen;
+      top_leds[i] = CRGB::DarkRed;
       FastLED.show();
       delay(10);
     }
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < NUM_INTERNAL_LEDS; i++)
     {
-      leds[i] = CRGB::DarkBlue;
+      internal_leds[i] = CRGB::DarkRed;
+      FastLED.show();
+      delay(10);
+    }
+    for (int i = 0; i < NUM_TOP_LEDS; i++)
+    {
+      top_leds[i] = CRGB::DarkGreen;
+      FastLED.show();
+      delay(10);
+    }
+    for (int i = 0; i < NUM_INTERNAL_LEDS; i++)
+    {
+      internal_leds[i] = CRGB::DarkGreen;
+      FastLED.show();
+      delay(10);
+    }
+    for (int i = 0; i < NUM_TOP_LEDS; i++)
+    {
+      top_leds[i] = CRGB::DarkBlue;
+      FastLED.show();
+      delay(10);
+    }
+    for (int i = 0; i < NUM_INTERNAL_LEDS; i++)
+    {
+      internal_leds[i] = CRGB::DarkBlue;
       FastLED.show();
       delay(10);
     }
@@ -529,11 +587,11 @@ void led_strip_start_pattern()
 void switch_all_leds(CRGB color, int i0, int n)
 {
   if(current_power_state == 0){
-    return;
+    color = CRGB::Black;
   }
   for (int i = i0; i < n; i++)
   {
-    leds[i] = color;
+    top_leds[i] = color;
   }
   FastLED.show();
 }
@@ -545,17 +603,6 @@ void leds_ok(CRGB color, int i0, int n)
   switch_all_leds(CRGB::Black, i0, n);
   delay(1000);
   switch_all_leds(color, i0, n);
-}
-
-void setColors(uint8_t lr, uint8_t lg, uint8_t lb, uint8_t rr, uint8_t rg, uint8_t rb)
-{ // uint8_t wait
-  leds[0].red = lr;
-  leds[0].green = lg;
-  leds[0].blue = lb;
-  leds[1].red = rr;
-  leds[1].green = rg;
-  leds[1].blue = rb;
-  FastLED.show();
 }
 
 void switch_relay(int val)
@@ -573,8 +620,8 @@ void switch_relay(int val)
   else
   {
     //switch robot off
-    playOff();
     switch_all_leds(CRGB::Black, 0, 10);
+    playOff();
     digitalWrite(RELAY_D, HIGH);
     digitalWrite(RELAY_CLK, LOW);
     digitalWrite(RELAY_CLK, HIGH);
